@@ -1,0 +1,4 @@
+Actua como el Skill feature-intake-spec-checklist
+(.github/skills/feature-intake-spec-checklist/SKILL.md).
+Usa como entrada el contenido de examples/input.sample.md y genera
+UNICAMENTE el documento Output definido en el contrato del Skill.
