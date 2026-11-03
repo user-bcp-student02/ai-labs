@@ -25,3 +25,29 @@ El token observado es Base64 de `username|role|expiry|secret`; no se observa ver
 | H-API-05 | api | Dependencias fijadas requieren verificación de advisories | Sugerencia | Resuelto: `urllib3` y `python-multipart` se actualizaron a versiones corregidas; PyJWT se añadió para la autenticación y se fijó en 2.15.0 tras comprobar sus advisories. | `api/requirements.txt:1-6`; [GHSA-8988-9cw3-xx77](https://github.com/advisories/GHSA-8988-9cw3-xx77), [GHSA-vxq7-64xx-v4gw](https://github.com/advisories/GHSA-vxq7-64xx-v4gw), [GHSA-5rvq-cxj2-64vf](https://github.com/advisories/GHSA-5rvq-cxj2-64vf), [GHSA-x33g-cr3x-6449](https://github.com/advisories/GHSA-x33g-cr3x-6449) | media | Resuelto |
 | H-API-06 | api | Rutas, persistencia, reglas y serialización concentradas en un módulo | Refactor | `main.py` concentraba inicialización, SQL, autorización y serialización. Resuelto: rutas, servicio de tareas, repositorio, modelos y servicio de carga quedaron separados. | `api/app/main.py:24-108`, `api/app/repositories/tasks_repository.py:13-65`, `api/app/services/tasks_service.py:19-58`, `api/app/schemas.py:9-52` | baja | Resuelto |
 | H-API-07 | api | Tipado crudo, excepciones amplias, lógica anidada y duplicación | Refactor | Se usaban diccionarios sin modelo, excepciones genéricas y resumen anidado. Resuelto: modelos Pydantic tipados, transformaciones reutilizables, cálculo sin anidamiento y captura específica de errores de transporte/carga. | `api/app/schemas.py:9-52`, `api/app/services/tasks_service.py:33-58`, `api/app/main.py:76-100` | baja | Resuelto |
+
+## Candidatos de discovery (api)
+
+### H-API-08: La creación acepta estados y prioridades no normalizados
+- Estado: CANDIDATO
+- Evidencia: `TaskCreateRequest` declara `status` y `priority` como `str` sin validadores ni enumeraciones (`api/app/schemas.py:9-14`). El resumen solo identifica `DONE` y `ARCHIVED` como cerrados y `HIGH` como prioridad alta (`api/app/services/tasks_service.py:11-12,37-40`).
+- Impacto: un valor ajeno al vocabulario esperado puede persistirse y aparecer como una categoría nueva en `byStatus`; un estado desconocido con prioridad `HIGH` también se contará como abierto. Esto puede producir resultados incoherentes para los consumidores.
+- Prioridad propuesta: media
+- Contrato potencialmente afectado: `POST /api/tasks` y los campos `byStatus` y `highPriorityOpen` de `GET /api/summary`.
+- Cómo validarlo: crear una tarea con `status: "UNKNOWN"` y `priority: "URGENT"`, consultar el resumen y comprobar si esos valores se aceptan y cuentan. Confirmar primero con el responsable del contrato cuáles son los valores válidos.
+
+### H-API-09: CORS permite solicitudes desde cualquier origen
+- Estado: CANDIDATO
+- Evidencia: el middleware configura `allow_origins=["*"]`, `allow_credentials=True`, `allow_methods=["*"]` y `allow_headers=["*"]` (`api/app/main.py:45-52`).
+- Impacto: cualquier origen queda habilitado por la política CORS; si un navegador dispone de un bearer token válido para esta API, una aplicación servida desde otro origen podría realizar solicitudes y leer respuestas protegidas. El riesgo efectivo depende de cómo se distribuyen y almacenan los tokens y de los orígenes previstos.
+- Prioridad propuesta: media
+- Contrato potencialmente afectado: política de acceso cross-origin para los endpoints `/api/*`.
+- Cómo validarlo: enviar una preflight `OPTIONS` con un `Origin` externo y `Access-Control-Request-Headers: authorization`, y revisar los encabezados CORS devueltos; contrastar el resultado con la lista de orígenes que el producto debe permitir.
+
+### H-API-10: El listado de tareas no limita el volumen de respuesta
+- Estado: CANDIDATO
+- Evidencia: `GET /api/tasks` devuelve una lista sin parámetros de paginación (`api/app/main.py:54-60`); el repositorio consulta todas las filas del propietario y ejecuta `fetchall()` sin `LIMIT` (`api/app/repositories/tasks_repository.py:33-37`).
+- Impacto: el tiempo de consulta, serialización y transferencia crece con todas las tareas acumuladas por propietario, sin un límite por solicitud; esto puede degradar latencia y consumo de memoria a medida que crecen los datos.
+- Prioridad propuesta: baja
+- Contrato potencialmente afectado: forma y volumen de la respuesta de `GET /api/tasks`, que actualmente devuelve un array completo.
+- Cómo validarlo: preparar una base con un volumen grande de tareas de un mismo propietario, consultar `GET /api/tasks` y medir filas devueltas, tamaño de respuesta y latencia; revisar también qué comportamiento de paginación aceptarían sus consumidores.
