@@ -1,0 +1,9 @@
+/openapi-review
+
+OpenAPI source: .github/skills/openapi-contract-review/example/auth-contract-example.yaml
+Taxonomía esperada: Dominio auth; tag permitido auth; se permite versionar rutas, pero debe conservarse /auth/login; operationId debe ser único.
+Endpoints esperados: POST /auth/login y POST /auth/refresh.
+Política de errores HTTP: /auth/login: 400, 401, 429, 500; /auth/refresh: 400, 401, 500. El formato de error debe incluir code y message como strings, y traceId opcional.
+Reglas funcionales: LoginRequest debe requerir username y password. LoginResponse debe incluir accessToken, refreshToken, tokenType y expiresIn.
+Reglas técnicas: OpenAPI 3.0.x o 3.1.x; requestBody JSON para operaciones POST; respuestas 2xx, 4xx y 5xx documentadas por operación; esquemas reutilizables en components/schemas.
+Criterio de severidad: Predeterminado de la skill.
