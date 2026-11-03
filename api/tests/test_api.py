@@ -1,7 +1,9 @@
+import asyncio
 import time
 from pathlib import Path
 
 import base64
+import httpx
 import jwt
 import pytest
 import urllib3
@@ -79,6 +81,73 @@ def test_uploads_requirement(tmp_path: Path) -> None:
         "storedAt": str(upload_dir / "requirements.txt"),
         "size": len(b"Login must be accessible"),
     }
+
+
+def test_upload_rejects_a_filename_collision_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    upload_dir = tmp_path / "uploads"
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        first_response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("requirements.txt", b"first", "text/plain")},
+        )
+        second_response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("requirements.txt", b"second", "text/plain")},
+        )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+    assert (upload_dir / "requirements.txt").read_bytes() == b"first"
+    assert list(upload_dir.iterdir()) == [upload_dir / "requirements.txt"]
+
+
+def test_concurrent_uploads_cannot_replace_the_same_filename(tmp_path: Path) -> None:
+    upload_dir = tmp_path / "uploads"
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+
+    async def send_uploads() -> list[httpx.Response]:
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                return await asyncio.gather(
+                    client.post(
+                        "/api/requirements",
+                        headers=headers(),
+                        files={"file": ("shared.txt", b"first", "text/plain")},
+                    ),
+                    client.post(
+                        "/api/requirements",
+                        headers=headers(),
+                        files={"file": ("shared.txt", b"second", "text/plain")},
+                    ),
+                )
+
+    responses = asyncio.run(send_uploads())
+
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    assert (upload_dir / "shared.txt").read_bytes() in {b"first", b"second"}
+
+
+def test_upload_openapi_preserves_multipart_file_contract(tmp_path: Path) -> None:
+    app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
+
+    with TestClient(app):
+        operation = app.openapi()["paths"]["/api/requirements"]["post"]
+    request_schema = operation["requestBody"]["content"]["multipart/form-data"]["schema"]
+
+    assert request_schema["properties"]["file"] == {
+        "type": "string",
+        "format": "binary",
+    }
+    assert request_schema["required"] == ["file"]
+    assert {"400", "409", "413"}.issubset(operation["responses"])
 
 
 def test_rejects_invalid_token(tmp_path: Path) -> None:
@@ -253,8 +322,9 @@ def test_upload_rejects_disallowed_extension(tmp_path: Path) -> None:
 def test_upload_rejects_files_over_configured_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    upload_dir = tmp_path / "uploads"
     monkeypatch.setenv("MAX_UPLOAD_BYTES", "4")
-    app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
     with TestClient(app) as client:
         response = client.post(
             "/api/requirements",
@@ -263,6 +333,87 @@ def test_upload_rejects_files_over_configured_limit(
         )
     assert response.status_code == 413
     assert response.json() == {"detail": "File too large"}
+    assert list(upload_dir.iterdir()) == []
+
+
+def test_upload_accepts_file_at_configured_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upload_dir = tmp_path / "uploads"
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "4")
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("exact.txt", b"1234", "text/plain")},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["size"] == 4
+    assert (upload_dir / "exact.txt").read_bytes() == b"1234"
+
+
+def test_upload_without_file_keeps_required_field_validation(
+    tmp_path: Path,
+) -> None:
+    app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            data={"description": "no file"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "file"]
+
+
+def test_upload_rejects_oversize_before_consuming_the_remaining_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    boundary = "upload-boundary"
+    body_chunks = [
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="large.txt"\r\n'
+            "Content-Type: text/plain\r\n\r\n"
+        ).encode(),
+        b"1234",
+        b"5",
+        f"\r\n--{boundary}--\r\n".encode(),
+    ]
+    consumed_chunks: list[int] = []
+
+    async def request_body():
+        for index, chunk in enumerate(body_chunks):
+            consumed_chunks.append(index)
+            yield chunk
+
+    upload_dir = tmp_path / "uploads"
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "4")
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+
+    async def send_streaming_request() -> httpx.Response:
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                return await client.post(
+                    "/api/requirements",
+                    headers={
+                        **headers(),
+                        "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    },
+                    content=request_body(),
+                )
+
+    response = asyncio.run(send_streaming_request())
+
+    assert response.status_code == 413
+    assert consumed_chunks == [0, 1, 2]
+    assert list(upload_dir.iterdir()) == []
 
 
 def test_backend_health_does_not_expose_transport_error(

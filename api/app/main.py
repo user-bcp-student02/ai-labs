@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import urllib3
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import UploadFile
 
 from app.repositories.tasks_repository import TasksRepository
 from app.schemas import BackendHealthResponse, SummaryResponse, TaskCreateRequest, TaskResponse, UploadResponse
@@ -72,13 +74,54 @@ def create_app(db_path: str | None = None, upload_dir: str | None = None) -> Fas
     ) -> SummaryResponse:
         return tasks_service.summary(identity)
 
-    @app.post("/api/requirements", status_code=201, response_model=UploadResponse)
+    @app.post(
+        "/api/requirements",
+        status_code=201,
+        response_model=UploadResponse,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "multipart/form-data": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "file": {"type": "string", "format": "binary"}
+                            },
+                            "required": ["file"],
+                        }
+                    }
+                },
+            }
+        },
+        responses={
+            400: {"description": "Invalid file name, extension, or multipart body"},
+            409: {"description": "A file with this name already exists"},
+            413: {"description": "File too large"},
+        },
+    )
     async def upload_requirement(
-        file: UploadFile = File(...),
+        request: Request,
         identity: Identity = Depends(get_identity),
     ) -> UploadResponse:
         try:
-            return await upload_service.store(file, identity["username"])
+            form_data = await upload_service.parse_request(request)
+            try:
+                file = form_data.get("file")
+                if not isinstance(file, UploadFile):
+                    raise RequestValidationError(
+                        [
+                            {
+                                "type": "missing",
+                                "loc": ("body", "file"),
+                                "msg": "Field required",
+                                "input": None,
+                            }
+                        ]
+                    )
+                return await upload_service.store(file, identity["username"])
+            finally:
+                await form_data.close()
         except UploadValidationError as error:
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
