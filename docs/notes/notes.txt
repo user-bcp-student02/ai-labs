@@ -2,3 +2,8 @@ https://bcp-dia3.yefri.workers.dev/
 
 https://bcp-lab01-recorrido.yefri.workers.dev
 
+
+https://huggingface.co/
+
+https://jev-model-routing.yefri.workers.dev
+
