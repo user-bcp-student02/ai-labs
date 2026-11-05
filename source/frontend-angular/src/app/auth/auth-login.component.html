@@ -1,0 +1,85 @@
+<!-- auth-login.component.html -->
+<form
+  [formGroup]="form"
+  (ngSubmit)="submit()"
+  [attr.aria-busy]="submitting"
+  novalidate
+>
+  <div class="field">
+    <label for="login-username">Usuario</label>
+    <input
+      id="login-username"
+      type="text"
+      formControlName="username"
+      autocomplete="username"
+      required
+      [attr.aria-invalid]="usernameRequiredError"
+      [attr.aria-describedby]="usernameRequiredError ? 'username-error' : null"
+    />
+    <p
+      *ngIf="usernameRequiredError"
+      id="username-error"
+      class="field-error"
+    >
+      Ingresa tu usuario.
+    </p>
+  </div>
+
+  <div class="field">
+    <label for="login-password">Contraseña</label>
+    <input
+      id="login-password"
+      type="password"
+      formControlName="password"
+      autocomplete="current-password"
+      required
+      [attr.aria-invalid]="passwordRequiredError"
+      [attr.aria-describedby]="passwordRequiredError ? 'password-error' : null"
+    />
+    <p
+      *ngIf="passwordRequiredError"
+      id="password-error"
+      class="field-error"
+    >
+      Ingresa tu contraseña.
+    </p>
+  </div>
+
+  <button type="submit" [disabled]="submitting || form.invalid">
+    {{ submitting ? 'Ingresando…' : 'Ingresar' }}
+  </button>
+
+  <p *ngIf="state === 'loading'" role="status" aria-live="polite">
+    Estamos verificando tus datos.
+  </p>
+
+  <p *ngIf="state === 'success'" role="status" aria-live="polite">
+    Inicio de sesión correcto.
+  </p>
+
+  <div
+    *ngIf="
+      state === 'credentials-error' ||
+      state === 'service-error' ||
+      state === 'generic-error'
+    "
+    #feedback
+    tabindex="-1"
+    role="alert"
+    aria-live="assertive"
+    class="feedback-error"
+  >
+    <ng-container [ngSwitch]="state">
+      <span *ngSwitchCase="'credentials-error'">
+        Usuario o contraseña incorrectos.
+      </span>
+      <span *ngSwitchCase="'service-error'">
+        No podemos completar el inicio de sesión ahora. Inténtalo de nuevo más
+        tarde.
+      </span>
+      <span *ngSwitchDefault>
+        No se pudo completar el inicio de sesión. Inténtalo de nuevo.
+      </span>
+    </ng-container>
+  </div>
+</form>
